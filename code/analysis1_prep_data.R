@@ -165,5 +165,40 @@ saveRDS(plotting_df, here("data/plotting_df"))
 
 
 
+# and finally can combine predictors with HEP data, group by ebird cell and summarize
+
+colony_rain_season <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/hep_prism_combined")  %>% 
+  mutate(month = as.numeric(month),
+         year = as.numeric(year)) %>% 
+  mutate(birdyear = ifelse(month <= 6, year, year + 1)) %>% 
+  group_by(parent.code, birdyear) %>% 
+  summarise(colony.year.rain = sum(rain.mm)) %>% 
+  ungroup() %>% 
+  rename("year" = birdyear)
+
+
+
+
+hep_abund <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>% 
+  full_join(plotting_df %>% select(code, ebird.cell.num)) %>% 
+  mutate(parent.code = round(code, 0)) %>% 
+  full_join(colony_rain_season)
+
+
+ebird_cell_annual <- hep_abund %>% 
+  group_by(ebird.cell.num, year, species) %>% 
+  summarise(subreg.rain = mean(colony.year.rain),
+            tot.nests = sum(peakactvnsts)) %>% 
+  ungroup() %>% 
+  arrange(ebird.cell.num, year) %>% 
+  group_by(ebird.cell.num) %>% 
+  mutate(lag1.rain = lag(subreg.rain),
+         lag2.rain = lag(subreg.rain, 2),
+         wt.lag.subreg.rain = subreg.rain + (lag1.rain/2) + (lag2.rain/3)) %>% 
+  ungroup()
+
+
+saveRDS(ebird_cell_annual, here("data/ebird_cell_annual"))
+
 
 
