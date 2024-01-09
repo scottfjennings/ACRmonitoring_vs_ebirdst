@@ -111,6 +111,16 @@ hep_sites <- hep_sites_from_access(here("C:/Users/scott.jennings/OneDrive - Audu
   select(code, utmnorth, utmeast) %>% 
   filter(!is.na(utmnorth))
 
+
+hep_sites_from_access(here("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")) %>% 
+  filter(!is.na(utmnorth)) %>% 
+  distinct(code, site.name, subregion) %>% 
+  full_join(distinct(hep_abund, code, site.name, ebird.cell.num)) %>% 
+  arrange(subregion, ebird.cell.num) %>% view()
+
+
+
+
 #' hep_site_ebirder
 #' 
 #' check whether a HEP colony is in an eBird cell
@@ -164,8 +174,11 @@ ggplot(states) +
 saveRDS(plotting_df, here("data/plotting_df"))
 
 
+# 4. and finally can combine predictors with HEP data, group by ebird cell and summarize ----
 
-# and finally can combine predictors with HEP data, group by ebird cell and summarize
+
+plotting_df <- readRDS(here("data/plotting_df"))
+
 
 colony_rain_season <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/hep_prism_combined")  %>% 
   mutate(month = as.numeric(month),
@@ -176,25 +189,45 @@ colony_rain_season <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon
   ungroup() %>% 
   rename("year" = birdyear)
 
-
-
+cell_rain_season <- plotting_df %>% 
+  mutate(parent.code = round(code, 0)) %>% 
+  distinct(parent.code, ebird.cell.num) %>% 
+  full_join(colony_rain_season)
+  
 
 hep_abund <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>% 
-  full_join(plotting_df %>% select(code, ebird.cell.num)) %>% 
+  full_join(plotting_df %>% dplyr::select(code, ebird.cell.num)) %>% 
   mutate(parent.code = round(code, 0)) %>% 
   full_join(colony_rain_season)
 
 
+filter(hep_abund, ebird.cell.num == 21, species == "SNEG", between(year, 2012, 2022), peakactvnsts >= 0) %>% 
+  arrange(year, code) %>% 
+  pivot_wider(id_cols = c(code, site.name), values_from = peakactvnsts, names_from = year) %>% 
+  view()
+
+
+# create list of species and cell numbers to map through
+spp_cells <- hep_abund %>% 
+  distinct(species, ebird.cell.num, code) %>% 
+  group_by(ebird.cell.num, species) %>% 
+  summarise(num.colonies = n()) %>% 
+  ungroup()
+
+saveRDS(spp_cells, here("data/spp_cells"))
+
+
 ebird_cell_annual <- hep_abund %>% 
+  filter(peakactvnsts >= 0) %>% 
   group_by(ebird.cell.num, year, species) %>% 
-  summarise(subreg.rain = mean(colony.year.rain),
+  summarise(cell.rain = mean(colony.year.rain),
             tot.nests = sum(peakactvnsts)) %>% 
   ungroup() %>% 
   arrange(ebird.cell.num, year) %>% 
   group_by(ebird.cell.num) %>% 
-  mutate(lag1.rain = lag(subreg.rain),
-         lag2.rain = lag(subreg.rain, 2),
-         wt.lag.subreg.rain = subreg.rain + (lag1.rain/2) + (lag2.rain/3)) %>% 
+  mutate(lag1.rain = lag(cell.rain),
+         lag2.rain = lag(cell.rain, 2),
+         wt.lag.cell.rain = cell.rain + (lag1.rain/2) + (lag2.rain/3)) %>% 
   ungroup()
 
 
