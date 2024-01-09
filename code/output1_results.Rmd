@@ -1,0 +1,270 @@
+---
+title: "Comparing trends from eBird and HEP"
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      error = FALSE)
+```
+
+
+```{r }
+
+
+
+
+library(tidyverse)
+library(scales)
+library(here)
+library(birdnames)
+library(sf)
+library(rnaturalearth)
+
+options(scipen = 999)
+
+```
+
+
+```{r }
+
+# boundaries of states in the united states
+states <- ne_states(iso_a2 = "US", returnclass = "sf") %>%
+  filter(iso_a2 == "US", postal %in% c("CA")) %>%
+  transmute(state = iso_3166_2)
+
+plotting_df <- readRDS(here("data/plotting_df"))
+
+subreg_lines <- st_read("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_spatial/data/subregions/subregion_line.shp")
+subreg_lines_ll <- st_transform(subreg_lines, crs= "EPSG:4326")
+
+
+atlas_bound_lines <- st_read("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_spatial/data/subregions/atlas_boundary_line.shp") %>% 
+  st_set_crs(st_crs(subreg_lines))
+atlas_bound_lines_ll <- st_transform(atlas_bound_lines, crs= "EPSG:4326")
+
+```
+
+How do bird population trend estimates from eBird compare to ACR's long term monitoring?  
+
+The eBird trend estimates are calculated for 27x27 km pixels across North America. The first step in comparing trend estimates is to assign HEP colonies to the appropriate eBird pixel. The pixels are smaller than the subregions used in several HEP analyses, so there is not a direct correspondence between eBird pixels and HEP subregions.
+
+
+```{r fig.width=6}
+# plot to double check cell assignments
+ggplot(states) +
+  geom_sf() +
+  geom_sf(data = atlas_bound_lines_ll) +
+  geom_sf(data = subreg_lines_ll) +
+  geom_rect(data = plotting_df, aes(xmin = min.longitude, xmax = max.longitude, ymin = min.latitude, ymax = max.latitude, color = as.factor(ebird.cell.num)), fill = NA) +
+  #  geom_point(aes(x = ebird.utmeast, y = ebird.utmnorth, color = as.factor(ebird.cell.num)), size = 3, shape = 2) +
+  ylim(37.5, 39) +
+  xlim(-123.5, -121.5) +
+  theme_bw() + 
+  theme(legend.position="none") +
+  labs(x = "",
+       y = "")
+
+```
+
+So when we assign colonies to eBird pixel and calculate trends at that spatial scale, results may not be very similar to those in the HEP trend analysis.
+```{r fig.width=6}
+# plot to double check cell assignments
+ggplot(states) +
+  geom_sf() +
+  geom_rect(data = plotting_df, aes(xmin = min.longitude, xmax = max.longitude, ymin = min.latitude, ymax = max.latitude, color = as.factor(ebird.cell.num)), fill = NA) +
+  geom_label(data = plotting_df, aes(x = min.longitude + 0.025, y = max.latitude - 0.025, label=ebird.cell.num, color = as.factor(ebird.cell.num)), size = 3) +
+  geom_point(data = plotting_df, aes(x = longitude, y = latitude, color = as.factor(ebird.cell.num))) +
+  #  geom_point(aes(x = ebird.utmeast, y = ebird.utmnorth, color = as.factor(ebird.cell.num)), size = 3, shape = 2) +
+  ylim(37.5, 39) +
+  xlim(-123.5, -121.5) +
+  theme_bw() + 
+  theme(legend.position="none") +
+  labs(x = "",
+       y = "")
+
+```
+
+
+
+```{r}
+
+sfba_trends <- readRDS(here("data/ebird_sfba_trends")) %>% 
+  full_join(readRDS(here("data/ebird_ll_utm"))) %>% 
+  select(alpha.code, contains("abd_trend"), ebird.cell.num, latitude, longitude)
+
+all_mod_av_preds <- readRDS(here("model_objects/all_mod_av_preds")) 
+
+percent_change <- all_mod_av_preds %>% 
+  group_by(ebird.cell.num, species) %>% 
+  mutate(start.end.year = case_when(year == min(year) ~ "first.year",
+                                    year == max(year) ~ "last.year",
+                                    TRUE ~ NA)) %>% 
+  ungroup() %>% 
+  filter(!is.na(start.end.year)) %>% 
+  select(ebird.cell.num, species, start.end.year, mod.avg.pred) %>% 
+  pivot_wider(id_cols = c(ebird.cell.num, species), values_from = mod.avg.pred, names_from = start.end.year)  %>% 
+  mutate(across(c(first.year, last.year), ~round(., 1)),
+         abs.change = last.year - first.year,
+         per.change = ifelse(first.year < 1, last.year, ((last.year/first.year) - 1) * 100),
+         per.change = round(per.change, 1)) %>% 
+  rename("alpha.code" = species)
+
+
+hep_ebird_changes <- full_join(sfba_trends, percent_change)  %>% 
+  select(alpha.code, contains("abd_trend"), ebird.cell.num, per.change, latitude, longitude) %>% 
+  filter(alpha.code != "BCNH") %>% 
+  left_join(plotting_df %>% distinct(ebird.cell.num, min.longitude, min.latitude, max.longitude, max.latitude))
+
+
+
+
+```
+
+```{r eval=FALSE}
+
+raw_dat <- readRDS(here("data/ebird_cell_annual")) %>% 
+  filter(between(year, 2012, 2022)) %>% 
+    dplyr::select(species, ebird.cell.num, year, tot.nests)
+
+
+  
+  pred_dat <- all_mod_av_preds %>% 
+    left_join(raw_dat) %>%
+    group_by(ebird.cell.num, species) %>% 
+    mutate(max.y = ifelse(max(tot.nests) > 10, ceiling(max(tot.nests) * 1.1), 10),
+           max.y = replace_na(max.y, 10),
+           common.name = translate_bird_names(species, "alpha.code", "common.name"))
+
+  
+pred_dat %>% 
+  filter(species != "BCNH") %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = mod.avg.pred, color = common.name), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lower.CL, ymax = upper.CL, fill = common.name), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests, color = common.name), size = 0.5)  + 
+  scale_x_continuous(breaks = seq(2010, 2025, by = 5), labels = seq(2010, 2025, by = 5)) + 
+  scale_y_continuous(breaks= pretty_breaks()) + 
+  expand_limits(y = 0) + 
+  #scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.3))))) +
+  facet_wrap(~ebird.cell.num, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year") +
+  theme_bw() +
+  theme(text = element_text(size=8)) +
+  geom_blank(aes(y = max.y))
+
+
+
+```
+
+```{r}
+
+ebird_cell_annual <- readRDS(here("data/ebird_cell_annual")) %>% 
+  filter(between(year, 2012, 2022)) %>% 
+  arrange(ebird.cell.num, species, year)
+
+
+plot_mod_avg_pred <- function(zspp) {
+  raw_dat <- ebird_cell_annual %>% 
+    filter(species == zspp) %>% 
+    dplyr::select(species, ebird.cell.num, year, tot.nests)
+
+
+  
+  pred_dat <- all_mod_av_preds %>% 
+    filter(species == zspp) %>% 
+    left_join(raw_dat) %>%
+    group_by(ebird.cell.num, species) %>% 
+    mutate(max.y = ifelse(max(tot.nests) > 10, ceiling(max(tot.nests) * 1.1), 10),
+           max.y = replace_na(max.y, 10))
+
+  
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = mod.avg.pred), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lower.CL, ymax = upper.CL), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+  scale_x_continuous(breaks = seq(2010, 2025, by = 5), labels = seq(2010, 2025, by = 5)) + 
+  scale_y_continuous(breaks= pretty_breaks()) + 
+  expand_limits(y = 0) + 
+  #scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.3))))) +
+  facet_wrap(~ebird.cell.num, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       title = translate_bird_names(zspp, "alpha.code", "common.name")) +
+  theme_bw() +
+  theme(text = element_text(size=8)) +
+  geom_blank(aes(y = max.y))
+
+mod_pred_plot
+
+}
+
+```
+<br>  
+
+Ebird trend estimates were calculated from 2012-2022. The HEP trends for each eBird pixel over that time span are shown below. I calculated these trends for each species only for eBird pixels that had at least 3 colonies for that species, and had that species nesting for at least 5 years. There are no eBird trends for Black-crowned Night-Heron.
+
+<br>  
+
+```{r fig.height = 8}
+
+plot_mod_avg_pred("GREG")
+
+```
+
+<br>  
+
+```{r fig.height = 8}
+
+plot_mod_avg_pred("GBHE")
+
+```
+
+<br>  
+
+```{r fig.height = 8}
+
+plot_mod_avg_pred("SNEG")
+
+```
+
+
+<br>  
+
+We can then compare these HEP trends to the eBird trends. In the figure below, the open square and error bars show the trend and 95% confidence interval for the eBird trend, and the closed circle shows the HEP trend. We generally see the closest agreement between eBird and HEP trends when both are close to 0. There are no eBird estimated trends stronger than 50% in either direction, but there are several such HEP trends. There are also several instances where the eBird and HEP trends are opposite from each other.
+<br>  
+
+```{r fig.height=10}
+hep_ebird_changes %>% 
+  rename("eBird" = abd_trend, "HEP" = per.change) %>% 
+  pivot_longer(cols = c("eBird", "HEP"), names_to = "which.trend", values_to = "trend") %>% 
+  mutate(abd_trend_lower = ifelse(which.trend == "HEP", NA, abd_trend_lower),
+         abd_trend_upper = ifelse(which.trend == "HEP", NA, abd_trend_upper))%>% 
+  ggplot() +
+  geom_point(aes(x = trend, y = as.factor(ebird.cell.num), size = which.trend, shape = which.trend, color = as.factor(ebird.cell.num))) +
+  geom_errorbar(aes(xmin = abd_trend_lower, xmax = abd_trend_upper, y = as.factor(ebird.cell.num), color = as.factor(ebird.cell.num))) +
+  geom_vline(xintercept = 0) +
+  facet_wrap(~translate_bird_names(alpha.code, "alpha.code", "common.name"), scales = "free_x", ncol = 2) +
+  scale_size_manual(values = c(2, 3)) +
+  scale_shape_manual(values = c(0, 19)) +
+  guides(color = "none",
+         size = "none") +
+  labs(shape = "",
+       y = "eBird pixel",
+       x = "Estimated trend") +
+  theme_bw()
+
+
+```
+  
+  
+  There are multiple possible reasons for differences between eBird and HEP trends. Two that I think may be most important are:  
+  1. HEP data represent only active breeders, while eBird data likely includes any non-breeding individuals that may be on the landscape. Thus, these two data sources track slightly different populations of birds, and it may be that these populations truly do have different trends.   
+  2. The analysis methods may be different enough to cause differences in estimated trends even if these differences don't really exist. The eBird models include many more predictor variables than HEP models, including habitat end effort predictors. I haven't figured out yet exactly how each predictor influenced the model for each species.   
+  
+  The eBird models account for possible issues of bias or inaccuracy in data collected by community scientists with a wider range of skills and less oversight than HEP, so I don't think that is a likely source of discrepancy between eBird and HEP trends. I haven't figured out how much actual data the eBird analysists had for each pixel, so I don't know how much each pixel's trend estimate was extrapolated from nearby pixels vs based on data from that pixel. For example, in pixel 21 we estimated a large increase in Snowy Egrets, mostly due to the increase of the Dover Park colony. But the eBird trend for this pixel is strongly negative, indicating those trends may not be based on actual observations at Dover Park.      
